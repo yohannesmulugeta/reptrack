@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RepTrack">
+<meta name="theme-color" content="#0a0a0f">
+<title>RepTrack</title>
+<link rel="manifest" href="manifest.json">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: rgba(255,255,255,0.07);
+    --accent-push: #ff4d4d;
+    --accent-squat: #4dff91;
+    --accent-plank: #4d9fff;
+    --text: #f0f0f8;
+    --muted: rgba(240,240,248,0.4);
+    --glow-push: rgba(255,77,77,0.3);
+    --glow-squat: rgba(77,255,145,0.3);
+    --glow-plank: rgba(77,159,255,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    overflow-x: hidden;
+  }
+
+  /* NOISE TEXTURE OVERLAY */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.6;
+  }
+
+  /* ── SCREENS ── */
+  .screen { display: none; flex-direction: column; min-height: 100vh; min-height: -webkit-fill-available; }
+  .screen.active { display: flex; }
+
+  /* ── HOME SCREEN ── */
+  #home {
+    padding: 0;
+    background: radial-gradient(ellipse at 20% 0%, rgba(77,159,255,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 100%, rgba(255,77,77,0.06) 0%, transparent 60%),
+                var(--bg);
+  }
+
+  .home-header {
+    padding: 56px 28px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 42px;
+    letter-spacing: 2px;
+    line-height: 1;
+    background: linear-gradient(135deg, var(--text) 0%, rgba(240,240,248,0.5) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .logo span {
+    background: linear-gradient(135deg, var(--accent-plank), var(--accent-squat));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .streak-badge {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 14px;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .streak-badge .num { font-size: 22px; font-weight: 700; color: #ffd700; }
+  .streak-badge .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+
+  .today-summary {
+    margin: 0 28px 32px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 20px;
+  }
+
+  .today-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  .today-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+
+  .today-stat {
+    text-align: center;
+  }
+
+  .today-stat .val {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px;
+    line-height: 1;
+  }
+
+  .today-stat .ex {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .today-stat.push .val { color: var(--accent-push); }
+  .today-stat.squat .val { color: var(--accent-squat); }
+  .today-stat.plank .val { color: var(--accent-plank); }
+
+  /* ── EXERCISE CARDS ── */
+  .section-label {
+    padding: 0 28px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--muted);
+  }
+
+  .cards {
+    padding: 0 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+  }
+
+  .ex-card {
+    border-radius: 24px;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    transition: transform 0.15s, box-shadow 0.15s;
+    -webkit-user-select: none;
+  }
+
+  .ex-card:active { transform: scale(0.97); }
+
+  .ex-card::before {
+    content: '';
+    position: absolute;
+    top: -40%;
+    left: -20%;
+    width: 60%;
+    height: 200%;
+    border-radius: 50%;
+    opacity: 0.12;
+    transition: opacity 0.3s;
+  }
+
+  .ex-card.push::before { background: var(--accent-push); }
+  .ex-card.squat::before { background: var(--accent-squat); }
+  .ex-card.plank::before { background: var(--accent-plank); }
+
+  .ex-card .card-left { display: flex; align-items: center; gap: 16px; z-index: 1; }
+
+  .ex-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+  }
+
+  .push .ex-icon { background: rgba(255,77,77,0.15); border: 1px solid rgba(255,77,77,0.3); }
+  .squat .ex-icon { background: rgba(77,255,145,0.15); border: 1px solid rgba(77,255,145,0.3); }
+  .plank .ex-icon { background: rgba(77,159,255,0.15); border: 1px solid rgba(77,159,255,0.3); }
+
+  .card-info .ex-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 26px;
+    letter-spacing: 1px;
+    line-height: 1;
+  }
+
+  .push .ex-name { color: var(--accent-push); }
+  .squat .ex-name { color: var(--accent-squat); }
+  .plank .ex-name { color: var(--accent-plank); }
+
+  .card-info .ex-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .card-right { z-index: 1; text-align: right; }
+
+  .card-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .push .card-count { color: var(--accent-push); }
+  .squat .card-count { color: var(--accent-squat); }
+  .plank .card-count { color: var(--accent-plank); }
+
+  .card-unit {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .home-bottom {
+    padding: 20px 28px 40px;
+    display: flex;
+    gap: 12px;
+  }
+
+  .btn-history {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 16px;
+    padding: 16px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  /* ── WORKOUT SCREEN ── */
+  #workout {
+    background: var(--bg);
+    position: relative;
+  }
+
+  .workout-bg {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    transition: background 0.5s;
+  }
+
+  .workout-bg.push { background: radial-gradient(ellipse at 50% 30%, rgba(255,77,77,0.12) 0%, transparent 70%); }
+  .workout-bg.squat { background: radial-gradient(ellipse at 50% 30%, rgba(77,255,145,0.10) 0%, transparent 70%); }
+  .workout-bg.plank { background: radial-gradient(ellipse at 50% 30%, rgba(77,159,255,0.10) 0%, transparent 70%); }
+
+  .workout-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 54px 24px 0;
+    position: relative;
+    z-index: 10;
+  }
+
+  .btn-back {
+    width: 44px; height: 44px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    color: var(--text);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .workout-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 28px;
+    letter-spacing: 2px;
+  }
+
+  .sensor-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #333;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+
+  .sensor-dot.active { background: #4dff91; box-shadow: 0 0 10px #4dff91; }
+  .sensor-dot.inactive { background: #ff4d4d; box-shadow: 0 0 10px #ff4d4d; }
+
+  .counter-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 10;
+    padding: 20px;
+  }
+
+  /* BIG RING */
+  .counter-ring {
+    width: 260px;
+    height: 260px;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    margin-bottom: 32px;
+  }
+
+  .counter-ring::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+  }
+
+  .counter-ring::after {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+  }
+
+  .ring-glow {
+    position: absolute;
+    inset: -20px;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+  }
+
+  .counter-ring.push .ring-glow { background: radial-gradient(circle, var(--glow-push) 0%, transparent 70%); }
+  .counter-ring.squat .ring-glow { background: radial-gradient(circle, var(--glow-squat) 0%, transparent 70%); }
+  .counter-ring.plank .ring-glow { background: radial-gradient(circle, var(--glow-plank) 0%, transparent 70%); }
+
+  .counter-ring.pulse .ring-glow { opacity: 1; }
+
+  .big-count {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 110px;
+    line-height: 1;
+    letter-spacing: -2px;
+    transition: transform 0.1s;
+  }
+
+  .push .big-count { color: var(--accent-push); }
+  .squat .big-count { color: var(--accent-squat); }
+  .plank .big-count { color: var(--accent-plank); }
+
+  .big-count.bump { transform: scale(1.15); }
+
+  .count-label {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    color: var(--muted);
+    margin-top: -8px;
+  }
+
+  /* PLANK TIMER */
+  .plank-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 22px;
+    color: var(--accent-plank);
+    margin-top: 8px;
+    display: none;
+  }
+
+  /* MOTION BARS */
+  .motion-viz {
+    display: flex;
+    gap: 4px;
+    align-items: flex-end;
+    height: 40px;
+    margin-bottom: 32px;
+  }
+
+  .motion-bar {
+    width: 6px;
+    border-radius: 3px;
+    background: var(--surface2);
+    transition: height 0.1s, background 0.1s;
+    min-height: 4px;
+  }
+
+  /* STATUS */
+  .status-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 16px 28px;
+    text-align: center;
+    margin-bottom: 24px;
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .status-text {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* CONTROLS */
+  .controls {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    max-width: 320px;
+    position: relative;
+    z-index: 10;
+    padding: 0 0 40px;
+  }
+
+  .btn-main {
+    flex: 1;
+    border: none;
+    border-radius: 20px;
+    padding: 20px;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 22px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.2s;
+  }
+
+  .btn-main:active { transform: scale(0.96); }
+
+  .btn-start {
+    background: linear-gradient(135deg, var(--accent-squat), #00cc66);
+    color: #0a0a0f;
+    box-shadow: 0 8px 30px rgba(77,255,145,0.3);
+  }
+
+  .btn-stop {
+    background: linear-gradient(135deg, var(--accent-push), #cc2200);
+    color: white;
+    box-shadow: 0 8px 30px rgba(255,77,77,0.3);
+  }
+
+  .btn-reset {
+    width: 60px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--muted);
+    font-size: 22px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ── HISTORY SCREEN ── */
+  #history {
+    background: var(--bg);
+    padding: 0;
+  }
+
+  .history-header {
+    padding: 56px 28px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .history-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px;
+    letter-spacing: 2px;
+  }
+
+  .history-content {
+    padding: 0 20px 40px;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .history-empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 60px 20px;
+    font-size: 14px;
+  }
+
+  .history-day {
+    margin-bottom: 20px;
+  }
+
+  .history-day-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--muted);
+    padding: 0 4px;
+    margin-bottom: 10px;
+  }
+
+  .history-entry {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .entry-left { display: flex; align-items: center; gap: 14px; }
+
+  .entry-icon {
+    width: 40px; height: 40px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+
+  .entry-push .entry-icon { background: rgba(255,77,77,0.15); }
+  .entry-squat .entry-icon { background: rgba(77,255,145,0.15); }
+  .entry-plank .entry-icon { background: rgba(77,159,255,0.15); }
+
+  .entry-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 20px;
+    letter-spacing: 1px;
+  }
+
+  .entry-push .entry-name { color: var(--accent-push); }
+  .entry-squat .entry-name { color: var(--accent-squat); }
+  .entry-plank .entry-name { color: var(--accent-plank); }
+
+  .entry-time { font-size: 12px; color: var(--muted); }
+
+  .entry-right { text-align: right; }
+
+  .entry-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 26px;
+    font-weight: 700;
+  }
+
+  .entry-push .entry-count { color: var(--accent-push); }
+  .entry-squat .entry-count { color: var(--accent-squat); }
+  .entry-plank .entry-count { color: var(--accent-plank); }
+
+  .entry-unit { font-size: 11px; color: var(--muted); }
+
+  /* ANIMATIONS */
+  @keyframes bump { 0%,100%{transform:scale(1)} 50%{transform:scale(1.12)} }
+  @keyframes fadeSlideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+
+  .fade-in { animation: fadeSlideUp 0.4s ease forwards; }
+
+  /* PERMISSION MODAL */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: flex-end;
+    z-index: 1000;
+    display: none;
+  }
+
+  .modal-overlay.show { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 28px 28px 0 0;
+    padding: 32px 28px 48px;
+    width: 100%;
+    animation: slideUp 0.3s ease;
+  }
+
+  @keyframes slideUp { from{transform:translateY(100%)} to{transform:translateY(0)} }
+
+  .modal-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 32px;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+
+  .modal-body { font-size: 14px; color: var(--muted); line-height: 1.6; margin-bottom: 28px; }
+
+  .modal-btn {
+    width: 100%;
+    border: none;
+    border-radius: 16px;
+    padding: 18px;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 20px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    background: linear-gradient(135deg, var(--accent-plank), #0077cc);
+    color: white;
+    box-shadow: 0 8px 30px rgba(77,159,255,0.3);
+    margin-bottom: 12px;
+  }
+
+  .modal-skip {
+    width: 100%;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 8px;
+  }
+
+  /* CALORIES MINI */
+  .cal-strip {
+    display: flex;
+    gap: 10px;
+    margin: 0 0 24px;
+    max-width: 320px;
+    width: 100%;
+  }
+
+  .cal-pill {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px 10px;
+    text-align: center;
+  }
+
+  .cal-pill .cp-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    color: #ffd700;
+  }
+
+  .cal-pill .cp-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+</style>
+</head>
+<body>
+
+<!-- PERMISSION MODAL -->
+<div class="modal-overlay" id="permModal">
+  <div class="modal">
+    <div class="modal-title">📡 Sensor Access</div>
+    <div class="modal-body">
+      RepTrack needs access to your iPhone's motion sensors (accelerometer & gyroscope) to count your reps automatically.<br><br>
+      Tap <strong>Allow</strong> when your browser asks for permission.
+    </div>
+    <button class="modal-btn" onclick="requestSensors()">Allow Motion Sensors</button>
+    <button class="modal-skip" onclick="closeModal()">Skip (Manual Count)</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ HOME SCREEN ═══════════════════════════════ -->
+<div class="screen active" id="home">
+  <div class="home-header">
+    <div class="logo">Rep<span>Track</span></div>
+    <div class="streak-badge">
+      <div class="num" id="streakNum">0</div>
+      <div class="label">🔥 Streak</div>
+    </div>
+  </div>
+
+  <div class="today-summary fade-in">
+    <div class="today-label">Today's reps</div>
+    <div class="today-stats">
+      <div class="today-stat push">
+        <div class="val" id="todayPush">0</div>
+        <div class="ex">Push-ups</div>
+      </div>
+      <div class="today-stat squat">
+        <div class="val" id="todaySquat">0</div>
+        <div class="ex">Squats</div>
+      </div>
+      <div class="today-stat plank">
+        <div class="val" id="todayPlank">0</div>
+        <div class="ex">Plank (s)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Choose Exercise</div>
+
+  <div class="cards">
+    <div class="ex-card push fade-in" onclick="openWorkout('push')" style="animation-delay:0.05s">
+      <div class="card-left">
+        <div class="ex-icon">💪</div>
+        <div class="card-info">
+          <div class="ex-name">Push-Up</div>
+          <div class="ex-sub">Chest · Triceps · Shoulders</div>
+        </div>
+      </div>
+      <div class="card-right">
+        <div class="card-count" id="homePush">0</div>
+        <div class="card-unit">today</div>
+      </div>
+    </div>
+
+    <div class="ex-card squat fade-in" onclick="openWorkout('squat')" style="animation-delay:0.1s">
+      <div class="card-left">
+        <div class="ex-icon">🦵</div>
+        <div class="card-info">
+          <div class="ex-name">Squat</div>
+          <div class="ex-sub">Quads · Glutes · Hamstrings</div>
+        </div>
+      </div>
+      <div class="card-right">
+        <div class="card-count" id="homeSquat">0</div>
+        <div class="card-unit">today</div>
+      </div>
+    </div>
+
+    <div class="ex-card plank fade-in" onclick="openWorkout('plank')" style="animation-delay:0.15s">
+      <div class="card-left">
+        <div class="ex-icon">⚡</div>
+        <div class="card-info">
+          <div class="ex-name">Plank</div>
+          <div class="ex-sub">Core · Stability · Endurance</div>
+        </div>
+      </div>
+      <div class="card-right">
+        <div class="card-count" id="homePlank">0</div>
+        <div class="card-unit">sec today</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="home-bottom">
+    <button class="btn-history" onclick="showHistory()">📋 History</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ WORKOUT SCREEN ═══════════════════════════════ -->
+<div class="screen" id="workout">
+  <div class="workout-bg" id="workoutBg"></div>
+
+  <div class="workout-nav">
+    <button class="btn-back" onclick="goHome()">←</button>
+    <div class="workout-title" id="workoutTitle">PUSH-UP</div>
+    <div class="sensor-dot" id="sensorDot"></div>
+  </div>
+
+  <div class="counter-area">
+    <div class="counter-ring" id="counterRing">
+      <div class="ring-glow"></div>
+      <div class="big-count" id="bigCount">0</div>
+      <div class="count-label" id="countLabel">REPS</div>
+      <div class="plank-time" id="plankTime">0:00</div>
+    </div>
+
+    <div class="motion-viz" id="motionViz">
+      <!-- bars injected by JS -->
+    </div>
+
+    <div class="cal-strip">
+      <div class="cal-pill">
+        <div class="cp-val" id="calBurned">0</div>
+        <div class="cp-label">Cal Burned</div>
+      </div>
+      <div class="cal-pill">
+        <div class="cp-val" id="sessionTime">0:00</div>
+        <div class="cp-label">Duration</div>
+      </div>
+    </div>
+
+    <div class="status-card">
+      <div class="status-text" id="statusText">Press Start, then place your phone on the floor near you and begin!</div>
+    </div>
+
+    <div class="controls">
+      <button class="btn-main btn-start" id="mainBtn" onclick="toggleWorkout()">START</button>
+      <button class="btn-reset" onclick="resetCount()">↺</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ HISTORY SCREEN ═══════════════════════════════ -->
+<div class="screen" id="history">
+  <div class="history-header">
+    <button class="btn-back" onclick="goHome()">←</button>
+    <div class="history-title">History</div>
+  </div>
+  <div class="history-content" id="historyContent"></div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────
+// STATE
+// ──────────────────────────────────────────────
+let currentExercise = 'push';
+let isRunning = false;
+let repCount = 0;
+let sensorEnabled = false;
+let plankSeconds = 0;
+let sessionSeconds = 0;
+let plankInterval = null;
+let sessionInterval = null;
+
+// Motion detection
+let lastY = null, lastZ = null;
+let repPhase = 'up'; // up | down
+let motionBuffer = [];
+const MOTION_BARS = 20;
+
+// Thresholds (tuned for each exercise)
+const CONFIG = {
+  push: {
+    title: 'PUSH-UP', icon: '💪', label: 'REPS',
+    axis: 'z', threshold: 0.4, cooldown: 600,
+    statusStart: 'Place phone on floor face-down near your chest. Phone will detect each rep!',
+    statusRunning: 'Go! Keep your form tight 💪',
+    calPerRep: 0.4
+  },
+  squat: {
+    title: 'SQUAT', icon: '🦵', label: 'REPS',
+    axis: 'y', threshold: 0.5, cooldown: 700,
+    statusStart: 'Hold the phone or clip it to your waist. It will detect each squat!',
+    statusRunning: 'Down and up — keep that back straight! 🦵',
+    calPerRep: 0.5
+  },
+  plank: {
+    title: 'PLANK', icon: '⚡', label: 'SEC',
+    axis: 'none', threshold: 0, cooldown: 0,
+    statusStart: 'Place phone on the floor near you. Start timer when you get into position!',
+    statusRunning: 'Hold strong! Core tight, breathe steady ⚡',
+    calPerRep: 0.1 // per second
+  }
+};
+
+let lastRepTime = 0;
+let motionReadings = [];
+
+// ──────────────────────────────────────────────
+// MOTION BARS INIT
+// ──────────────────────────────────────────────
+const motionViz = document.getElementById('motionViz');
+for (let i = 0; i < MOTION_BARS; i++) {
+  const bar = document.createElement('div');
+  bar.className = 'motion-bar';
+  bar.style.height = '4px';
+  motionViz.appendChild(bar);
+}
+
+function updateMotionBars(magnitude) {
+  motionBuffer.push(Math.min(magnitude * 20, 40));
+  if (motionBuffer.length > MOTION_BARS) motionBuffer.shift();
+  const bars = motionViz.querySelectorAll('.motion-bar');
+  bars.forEach((b, i) => {
+    const h = motionBuffer[i] || 4;
+    b.style.height = Math.max(4, h) + 'px';
+    const color = currentExercise === 'push' ? '#ff4d4d' : currentExercise === 'squat' ? '#4dff91' : '#4d9fff';
+    b.style.background = h > 15 ? color : 'var(--surface2)';
+  });
+}
+
+// ──────────────────────────────────────────────
+// SCREENS
+// ──────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+function openWorkout(exercise) {
+  currentExercise = exercise;
+  repCount = 0;
+  sessionSeconds = 0;
+  plankSeconds = 0;
+  isRunning = false;
+
+  const cfg = CONFIG[exercise];
+  document.getElementById('workoutTitle').textContent = cfg.title;
+  document.getElementById('bigCount').textContent = '0';
+  document.getElementById('countLabel').textContent = cfg.label;
+  document.getElementById('plankTime').style.display = exercise === 'plank' ? 'block' : 'none';
+  document.getElementById('plankTime').textContent = '0:00';
+  document.getElementById('statusText').textContent = cfg.statusStart;
+  document.getElementById('mainBtn').textContent = 'START';
+  document.getElementById('mainBtn').className = 'btn-main btn-start';
+  document.getElementById('calBurned').textContent = '0';
+  document.getElementById('sessionTime').textContent = '0:00';
+
+  const ring = document.getElementById('counterRing');
+  const bg = document.getElementById('workoutBg');
+  ring.className = 'counter-ring ' + exercise;
+  bg.className = 'workout-bg ' + exercise;
+  document.getElementById('bigCount').className = 'big-count';
+
+  motionBuffer = [];
+  updateMotionBars(0);
+
+  if (!sensorEnabled && typeof DeviceMotionEvent !== 'undefined') {
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      document.getElementById('permModal').classList.add('show');
+    } else {
+      startSensor();
+    }
+  }
+
+  showScreen('workout');
+}
+
+function goHome() {
+  stopWorkout();
+  updateHomeStats();
+  showScreen('home');
+}
+
+function showHistory() {
+  renderHistory();
+  showScreen('history');
+}
+
+// ──────────────────────────────────────────────
+// SENSOR
+// ──────────────────────────────────────────────
+function requestSensors() {
+  closeModal();
+  DeviceMotionEvent.requestPermission().then(state => {
+    if (state === 'granted') startSensor();
+    else document.getElementById('statusText').textContent = 'Sensor denied. Count will be manual — tap the counter ring to add a rep!';
+  }).catch(() => startSensor());
+}
+
+function startSensor() {
+  sensorEnabled = true;
+  document.getElementById('sensorDot').className = 'sensor-dot active';
+  window.addEventListener('devicemotion', onMotion);
+}
+
+function closeModal() {
+  document.getElementById('permModal').classList.remove('show');
+  document.getElementById('sensorDot').className = 'sensor-dot inactive';
+}
+
+let lastAccel = { x: 0, y: 0, z: 0 };
+let smoothY = 0, smoothZ = 0;
+const ALPHA = 0.7; // smoothing factor
+
+function onMotion(e) {
+  if (!isRunning) return;
+  const acc = e.accelerationIncludingGravity;
+  if (!acc) return;
+
+  const x = acc.x || 0, y = acc.y || 0, z = acc.z || 0;
+  smoothY = ALPHA * smoothY + (1 - ALPHA) * y;
+  smoothZ = ALPHA * smoothZ + (1 - ALPHA) * z;
+
+  const mag = Math.sqrt(
+    (x - lastAccel.x) ** 2 +
+    (y - lastAccel.y) ** 2 +
+    (z - lastAccel.z) ** 2
+  );
+
+  lastAccel = { x, y, z };
+  updateMotionBars(mag);
+
+  const cfg = CONFIG[currentExercise];
+  if (currentExercise === 'plank') return;
+
+  const now = Date.now();
+  if (now - lastRepTime < cfg.cooldown) return;
+
+  const val = cfg.axis === 'y' ? smoothY : smoothZ;
+
+  if (repPhase === 'up' && val < -cfg.threshold) {
+    repPhase = 'down';
+  } else if (repPhase === 'down' && val > cfg.threshold * 0.6) {
+    repPhase = 'up';
+    lastRepTime = now;
+    incrementRep();
+  }
+}
+
+// TAP TO COUNT manually
+document.getElementById('counterRing').addEventListener('click', () => {
+  if (isRunning && !sensorEnabled) incrementRep();
+});
+
+// ──────────────────────────────────────────────
+// WORKOUT CONTROL
+// ──────────────────────────────────────────────
+function toggleWorkout() {
+  if (isRunning) stopWorkout();
+  else startWorkout();
+}
+
+function startWorkout() {
+  isRunning = true;
+  repPhase = 'up';
+  lastRepTime = 0;
+
+  document.getElementById('mainBtn').textContent = 'STOP';
+  document.getElementById('mainBtn').className = 'btn-main btn-stop';
+  document.getElementById('statusText').textContent = CONFIG[currentExercise].statusRunning;
+
+  // Session timer
+  sessionInterval = setInterval(() => {
+    sessionSeconds++;
+    document.getElementById('sessionTime').textContent = formatTime(sessionSeconds);
+  }, 1000);
+
+  // Plank timer
+  if (currentExercise === 'plank') {
+    plankInterval = setInterval(() => {
+      plankSeconds++;
+      document.getElementById('plankTime').textContent = formatTime(plankSeconds);
+      document.getElementById('bigCount').textContent = plankSeconds;
+      document.getElementById('calBurned').textContent = Math.round(plankSeconds * 0.1);
+      updateMotionBars(Math.random() * 2); // show activity
+      // Pulse ring
+      const ring = document.getElementById('counterRing');
+      ring.classList.add('pulse');
+      setTimeout(() => ring.classList.remove('pulse'), 300);
+    }, 1000);
+  }
+}
+
+function stopWorkout() {
+  if (!isRunning && !plankInterval && !sessionInterval) return;
+  isRunning = false;
+  clearInterval(plankInterval);
+  clearInterval(sessionInterval);
+  plankInterval = null;
+  sessionInterval = null;
+
+  document.getElementById('mainBtn').textContent = 'START';
+  document.getElementById('mainBtn').className = 'btn-main btn-start';
+  document.getElementById('statusText').textContent = CONFIG[currentExercise].statusStart;
+
+  // Save to history
+  if (repCount > 0 || plankSeconds > 0) {
+    saveSession();
+  }
+}
+
+function resetCount() {
+  stopWorkout();
+  repCount = 0;
+  plankSeconds = 0;
+  sessionSeconds = 0;
+  document.getElementById('bigCount').textContent = '0';
+  document.getElementById('plankTime').textContent = '0:00';
+  document.getElementById('calBurned').textContent = '0';
+  document.getElementById('sessionTime').textContent = '0:00';
+  motionBuffer = [];
+  updateMotionBars(0);
+}
+
+function incrementRep() {
+  repCount++;
+  document.getElementById('bigCount').textContent = repCount;
+
+  // Bump animation
+  const bc = document.getElementById('bigCount');
+  bc.classList.remove('bump');
+  void bc.offsetWidth;
+  bc.classList.add('bump');
+  setTimeout(() => bc.classList.remove('bump'), 200);
+
+  // Glow pulse
+  const ring = document.getElementById('counterRing');
+  ring.classList.add('pulse');
+  setTimeout(() => ring.classList.remove('pulse'), 400);
+
+  // Calories
+  const cal = Math.round(repCount * CONFIG[currentExercise].calPerRep);
+  document.getElementById('calBurned').textContent = cal;
+
+  // Status every 5
+  if (repCount % 5 === 0) {
+    document.getElementById('statusText').textContent = `💥 ${repCount} reps! Keep pushing!`;
+  }
+}
+
+// ──────────────────────────────────────────────
+// DATA / STORAGE
+// ──────────────────────────────────────────────
+function getStorage() {
+  try { return JSON.parse(localStorage.getItem('reptrack') || '{"sessions":[],"today":{}}'); }
+  catch { return { sessions: [], today: {} }; }
+}
+
+function setStorage(data) {
+  localStorage.setItem('reptrack', JSON.stringify(data));
+}
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function saveSession() {
+  const data = getStorage();
+  const val = currentExercise === 'plank' ? plankSeconds : repCount;
+  const unit = currentExercise === 'plank' ? 'sec' : 'reps';
+
+  const session = {
+    exercise: currentExercise,
+    value: val,
+    unit,
+    date: todayKey(),
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    cal: Math.round(val * CONFIG[currentExercise].calPerRep),
+    duration: sessionSeconds
+  };
+
+  data.sessions.unshift(session);
+
+  // Update today totals
+  if (!data.today[todayKey()]) data.today[todayKey()] = { push: 0, squat: 0, plank: 0 };
+  data.today[todayKey()][currentExercise] += val;
+
+  setStorage(data);
+}
+
+function updateHomeStats() {
+  const data = getStorage();
+  const t = data.today[todayKey()] || { push: 0, squat: 0, plank: 0 };
+
+  document.getElementById('todayPush').textContent = t.push;
+  document.getElementById('todaySquat').textContent = t.squat;
+  document.getElementById('todayPlank').textContent = t.plank;
+  document.getElementById('homePush').textContent = t.push;
+  document.getElementById('homeSquat').textContent = t.squat;
+  document.getElementById('homePlank').textContent = t.plank;
+
+  // Streak calc
+  const days = Object.keys(data.today).sort().reverse();
+  let streak = 0;
+  const today = todayKey();
+  for (let i = 0; i < days.length; i++) {
+    const expected = new Date();
+    expected.setDate(expected.getDate() - i);
+    const exp = expected.toISOString().slice(0, 10);
+    if (days.includes(exp)) streak++;
+    else break;
+  }
+  document.getElementById('streakNum').textContent = streak;
+}
+
+function renderHistory() {
+  const data = getStorage();
+  const el = document.getElementById('historyContent');
+
+  if (!data.sessions.length) {
+    el.innerHTML = '<div class="history-empty">No workouts yet.<br>Start your first session! 💪</div>';
+    return;
+  }
+
+  // Group by date
+  const byDate = {};
+  data.sessions.forEach(s => {
+    if (!byDate[s.date]) byDate[s.date] = [];
+    byDate[s.date].push(s);
+  });
+
+  const icons = { push: '💪', squat: '🦵', plank: '⚡' };
+  const names = { push: 'Push-Up', squat: 'Squat', plank: 'Plank' };
+
+  el.innerHTML = Object.keys(byDate).sort().reverse().map(date => {
+    const d = new Date(date + 'T12:00:00');
+    const label = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+    const entries = byDate[date].map(s => `
+      <div class="history-entry entry-${s.exercise}">
+        <div class="entry-left">
+          <div class="entry-icon">${icons[s.exercise]}</div>
+          <div>
+            <div class="entry-name">${names[s.exercise]}</div>
+            <div class="entry-time">${s.time} · ${s.cal} cal</div>
+          </div>
+        </div>
+        <div class="entry-right">
+          <div class="entry-count">${s.value}</div>
+          <div class="entry-unit">${s.unit}</div>
+        </div>
+      </div>
+    `).join('');
+
+    return `<div class="history-day">
+      <div class="history-day-label">${label}</div>
+      ${entries}
+    </div>`;
+  }).join('');
+}
+
+// ──────────────────────────────────────────────
+// HELPERS
+// ──────────────────────────────────────────────
+function formatTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+// ──────────────────────────────────────────────
+// INIT
+// ──────────────────────────────────────────────
+updateHomeStats();
+
+// Check if sensor already available (Android / non-iOS)
+if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission !== 'function') {
+  startSensor();
+}
+
+// Register SW for PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
