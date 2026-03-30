@@ -680,6 +680,78 @@
     letter-spacing: 1px;
     margin-top: 2px;
   }
+
+  /* SENSITIVITY ROW */
+  .sens-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    max-width: 320px;
+    margin-bottom: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px 16px;
+  }
+
+  .sens-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .sens-val { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--text); min-width: 18px; text-align: right; }
+
+  input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--surface2);
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--text);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+
+  /* CALIBRATE */
+  .btn-calibrate {
+    width: 100%;
+    max-width: 320px;
+    border: 1px dashed rgba(255,255,255,0.2);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 14px;
+    padding: 12px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    margin-bottom: 14px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .btn-calibrate:active { color: var(--text); border-color: rgba(255,255,255,0.4); }
+
+  /* CALIBRATION OVERLAY */
+  .calib-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+    padding: 40px;
+    text-align: center;
+  }
+  .calib-overlay.show { display: flex; }
+  .calib-title { font-family: 'Bebas Neue', sans-serif; font-size: 36px; letter-spacing: 2px; margin-bottom: 12px; }
+  .calib-sub { font-size: 14px; color: var(--muted); line-height: 1.6; margin-bottom: 32px; }
+  .calib-count { font-family: 'Bebas Neue', sans-serif; font-size: 80px; line-height: 1; color: #ffd700; margin-bottom: 8px; }
+  .calib-hint { font-size: 13px; color: var(--muted); margin-bottom: 32px; }
+  .btn-calib-cancel { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 14px; padding: 14px 32px; font-family: 'DM Sans', sans-serif; font-size: 14px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -813,6 +885,16 @@
       <div class="status-text" id="statusText">Press Start, then place your phone on the floor near you and begin!</div>
     </div>
 
+    <!-- SENSITIVITY SLIDER -->
+    <div class="sens-row" id="sensRow" style="display:none">
+      <span class="sens-label">Sensitivity</span>
+      <input type="range" id="sensSlider" min="1" max="10" value="5" oninput="onSensChange(this.value)">
+      <span class="sens-val" id="sensVal">5</span>
+    </div>
+
+    <!-- CALIBRATE BUTTON -->
+    <button class="btn-calibrate" id="calibrateBtn" style="display:none" onclick="startCalibration()">🎯 Calibrate (do 3 reps)</button>
+
     <div class="controls">
       <button class="btn-main btn-start" id="mainBtn" onclick="toggleWorkout()">START</button>
       <button class="btn-reset" onclick="resetCount()">↺</button>
@@ -829,6 +911,15 @@
   <div class="history-content" id="historyContent"></div>
 </div>
 
+<!-- CALIBRATION OVERLAY -->
+<div class="calib-overlay" id="calibOverlay">
+  <div class="calib-title" id="calibTitle">🎯 Calibrate</div>
+  <div class="calib-sub" id="calibSub">Do <strong>3 reps</strong> at your normal pace.<br>The app will learn your movement pattern.</div>
+  <div class="calib-count" id="calibCount">3</div>
+  <div class="calib-hint" id="calibHint">Waiting for movement...</div>
+  <button class="btn-calib-cancel" onclick="cancelCalibration()">Cancel</button>
+</div>
+
 <script>
 // ──────────────────────────────────────────────
 // STATE
@@ -841,40 +932,58 @@ let plankSeconds = 0;
 let sessionSeconds = 0;
 let plankInterval = null;
 let sessionInterval = null;
-
-// Motion detection
-let lastY = null, lastZ = null;
-let repPhase = 'up'; // up | down
 let motionBuffer = [];
 const MOTION_BARS = 20;
 
-// Thresholds (tuned for each exercise)
+// ── SMART SENSOR ENGINE ──
+// Sliding window of raw magnitude values for peak detection
+const MAG_WINDOW = 15;       // samples to keep (~300ms at 50hz)
+let magHistory = [];          // recent magnitude values
+let baselineHistory = [];     // for dynamic baseline (gravity removal)
+let lastRepTime = 0;
+let repPhase = 'rest';        // rest | active
+
+// Per-exercise dynamic threshold — starts at a default, overridden by calibration
+let customThreshold = null;   // null = use default
+let sensitivityLevel = 5;     // 1–10 slider, higher = more sensitive (lower threshold)
+
+// Calibration state
+let isCalibrating = false;
+let calibRepsLeft = 3;
+let calibPeaks = [];
+let calibPhase = 'rest';
+let calibLastRepTime = 0;
+
 const CONFIG = {
   push: {
     title: 'PUSH-UP', icon: '💪', label: 'REPS',
-    axis: 'z', threshold: 0.4, cooldown: 600,
-    statusStart: 'Place phone on floor face-down near your chest. Phone will detect each rep!',
-    statusRunning: 'Go! Keep your form tight 💪',
-    calPerRep: 0.4
+    // Phone in back pocket OR on floor. We use TOTAL magnitude delta from baseline.
+    defaultThreshold: 3.5,   // m/s² above baseline — a clear push
+    minCooldown: 500,         // ms minimum between reps
+    statusStart: '📱 Put the phone in your BACK POCKET or lay it on the floor near your chest. Then press START.',
+    statusRunning: 'Go! Each push-up detected automatically 💪',
+    calPerRep: 0.4,
+    placement: 'back pocket or floor near chest'
   },
   squat: {
     title: 'SQUAT', icon: '🦵', label: 'REPS',
-    axis: 'y', threshold: 0.5, cooldown: 700,
-    statusStart: 'Hold the phone or clip it to your waist. It will detect each squat!',
-    statusRunning: 'Down and up — keep that back straight! 🦵',
-    calPerRep: 0.5
+    defaultThreshold: 3.0,
+    minCooldown: 600,
+    statusStart: '📱 Hold the phone in your HAND or put it in your FRONT POCKET. Then press START.',
+    statusRunning: 'Squat down and back up — detecting each rep 🦵',
+    calPerRep: 0.5,
+    placement: 'hand or front pocket'
   },
   plank: {
     title: 'PLANK', icon: '⚡', label: 'SEC',
-    axis: 'none', threshold: 0, cooldown: 0,
-    statusStart: 'Place phone on the floor near you. Start timer when you get into position!',
+    defaultThreshold: 0,
+    minCooldown: 0,
+    statusStart: '📱 Place the phone anywhere — pocket or floor. Timer starts when you press START.',
     statusRunning: 'Hold strong! Core tight, breathe steady ⚡',
-    calPerRep: 0.1 // per second
+    calPerRep: 0.1,
+    placement: 'anywhere'
   }
 };
-
-let lastRepTime = 0;
-let motionReadings = [];
 
 // ──────────────────────────────────────────────
 // MOTION BARS INIT
@@ -888,14 +997,15 @@ for (let i = 0; i < MOTION_BARS; i++) {
 }
 
 function updateMotionBars(magnitude) {
-  motionBuffer.push(Math.min(magnitude * 20, 40));
+  const scaled = Math.min(magnitude * 3, 40);
+  motionBuffer.push(scaled);
   if (motionBuffer.length > MOTION_BARS) motionBuffer.shift();
   const bars = motionViz.querySelectorAll('.motion-bar');
+  const color = currentExercise === 'push' ? '#ff4d4d' : currentExercise === 'squat' ? '#4dff91' : '#4d9fff';
   bars.forEach((b, i) => {
     const h = motionBuffer[i] || 4;
     b.style.height = Math.max(4, h) + 'px';
-    const color = currentExercise === 'push' ? '#ff4d4d' : currentExercise === 'squat' ? '#4dff91' : '#4d9fff';
-    b.style.background = h > 15 ? color : 'var(--surface2)';
+    b.style.background = h > 12 ? color : 'var(--surface2)';
   });
 }
 
@@ -914,6 +1024,10 @@ function openWorkout(exercise) {
   sessionSeconds = 0;
   plankSeconds = 0;
   isRunning = false;
+  customThreshold = null;
+  magHistory = [];
+  baselineHistory = [];
+  motionBuffer = [];
 
   const cfg = CONFIG[exercise];
   document.getElementById('workoutTitle').textContent = cfg.title;
@@ -927,13 +1041,18 @@ function openWorkout(exercise) {
   document.getElementById('calBurned').textContent = '0';
   document.getElementById('sessionTime').textContent = '0:00';
 
+  // Show sensitivity + calibrate controls
+  document.getElementById('sensRow').style.display = exercise !== 'plank' ? 'flex' : 'none';
+  document.getElementById('calibrateBtn').style.display = exercise !== 'plank' ? 'block' : 'none';
+  document.getElementById('sensSlider').value = sensitivityLevel;
+  document.getElementById('sensVal').textContent = sensitivityLevel;
+
   const ring = document.getElementById('counterRing');
   const bg = document.getElementById('workoutBg');
   ring.className = 'counter-ring ' + exercise;
   bg.className = 'workout-bg ' + exercise;
   document.getElementById('bigCount').className = 'big-count';
 
-  motionBuffer = [];
   updateMotionBars(0);
 
   if (!sensorEnabled && typeof DeviceMotionEvent !== 'undefined') {
@@ -949,6 +1068,7 @@ function openWorkout(exercise) {
 
 function goHome() {
   stopWorkout();
+  cancelCalibration();
   updateHomeStats();
   showScreen('home');
 }
@@ -959,20 +1079,39 @@ function showHistory() {
 }
 
 // ──────────────────────────────────────────────
+// SENSITIVITY SLIDER
+// ──────────────────────────────────────────────
+function onSensChange(val) {
+  sensitivityLevel = parseInt(val);
+  document.getElementById('sensVal').textContent = val;
+  // Reset custom threshold so new sensitivity takes effect
+  customThreshold = null;
+}
+
+function getThreshold() {
+  if (customThreshold !== null) return customThreshold;
+  // Sensitivity 1 = hardest to trigger (high threshold), 10 = easiest (low threshold)
+  const base = CONFIG[currentExercise].defaultThreshold;
+  // Map slider 1–10 to multiplier 2.0 → 0.4
+  const multiplier = 2.0 - (sensitivityLevel - 1) * (1.6 / 9);
+  return base * multiplier;
+}
+
+// ──────────────────────────────────────────────
 // SENSOR
 // ──────────────────────────────────────────────
 function requestSensors() {
   closeModal();
   DeviceMotionEvent.requestPermission().then(state => {
     if (state === 'granted') startSensor();
-    else document.getElementById('statusText').textContent = 'Sensor denied. Count will be manual — tap the counter ring to add a rep!';
+    else document.getElementById('statusText').textContent = 'Sensor denied. Tap the ring manually to count reps.';
   }).catch(() => startSensor());
 }
 
 function startSensor() {
   sensorEnabled = true;
   document.getElementById('sensorDot').className = 'sensor-dot active';
-  window.addEventListener('devicemotion', onMotion);
+  window.addEventListener('devicemotion', onMotion, { passive: true });
 }
 
 function closeModal() {
@@ -980,49 +1119,147 @@ function closeModal() {
   document.getElementById('sensorDot').className = 'sensor-dot inactive';
 }
 
-let lastAccel = { x: 0, y: 0, z: 0 };
-let smoothY = 0, smoothZ = 0;
-const ALPHA = 0.7; // smoothing factor
+// ── PEAK DETECTION ENGINE ──
+// Strategy:
+// 1. Compute raw magnitude of acceleration vector every sample
+// 2. Maintain a rolling "baseline" using a slow-moving average (gravity cancellation)
+// 3. Subtract baseline → get "dynamic" acceleration (only movement, not gravity)
+// 4. When dynamic acc exceeds threshold → mark as ACTIVE
+// 5. When it drops back below threshold after being active → count 1 REP (peak complete)
+// 6. Enforce cooldown to prevent double-counts
+
+let dynamicBaseline = 9.8; // start at gravity
+const BASELINE_ALPHA = 0.98; // very slow update — preserves gravity well
+const PEAK_ALPHA = 0.3;      // fast update for current reading
+
+let smoothMag = 9.8;
+let peakActive = false;
+let peakMax = 0;
 
 function onMotion(e) {
-  if (!isRunning) return;
   const acc = e.accelerationIncludingGravity;
   if (!acc) return;
 
   const x = acc.x || 0, y = acc.y || 0, z = acc.z || 0;
-  smoothY = ALPHA * smoothY + (1 - ALPHA) * y;
-  smoothZ = ALPHA * smoothZ + (1 - ALPHA) * z;
+  const rawMag = Math.sqrt(x*x + y*y + z*z);
 
-  const mag = Math.sqrt(
-    (x - lastAccel.x) ** 2 +
-    (y - lastAccel.y) ** 2 +
-    (z - lastAccel.z) ** 2
-  );
+  // Update slow baseline (tracks gravity over time)
+  dynamicBaseline = BASELINE_ALPHA * dynamicBaseline + (1 - BASELINE_ALPHA) * rawMag;
 
-  lastAccel = { x, y, z };
-  updateMotionBars(mag);
+  // Smooth fast signal
+  smoothMag = PEAK_ALPHA * rawMag + (1 - PEAK_ALPHA) * smoothMag;
 
-  const cfg = CONFIG[currentExercise];
-  if (currentExercise === 'plank') return;
+  // Dynamic acceleration = deviation from baseline
+  const dynAcc = Math.abs(smoothMag - dynamicBaseline);
 
+  updateMotionBars(dynAcc);
+
+  // Calibration mode — record peaks
+  if (isCalibrating) {
+    handleCalibrationMotion(dynAcc);
+    return;
+  }
+
+  if (!isRunning || currentExercise === 'plank') return;
+
+  const threshold = getThreshold();
   const now = Date.now();
-  if (now - lastRepTime < cfg.cooldown) return;
 
-  const val = cfg.axis === 'y' ? smoothY : smoothZ;
-
-  if (repPhase === 'up' && val < -cfg.threshold) {
-    repPhase = 'down';
-  } else if (repPhase === 'down' && val > cfg.threshold * 0.6) {
-    repPhase = 'up';
-    lastRepTime = now;
-    incrementRep();
+  if (!peakActive && dynAcc > threshold) {
+    // Rising edge — movement started
+    peakActive = true;
+    peakMax = dynAcc;
+  } else if (peakActive) {
+    peakMax = Math.max(peakMax, dynAcc);
+    if (dynAcc < threshold * 0.4) {
+      // Falling edge — movement ended, count rep
+      peakActive = false;
+      if (now - lastRepTime > CONFIG[currentExercise].minCooldown) {
+        lastRepTime = now;
+        incrementRep();
+      }
+      peakMax = 0;
+    }
   }
 }
 
-// TAP TO COUNT manually
+// TAP to count manually (when sensor off)
 document.getElementById('counterRing').addEventListener('click', () => {
-  if (isRunning && !sensorEnabled) incrementRep();
+  if (isRunning && currentExercise !== 'plank') incrementRep();
 });
+
+// ──────────────────────────────────────────────
+// CALIBRATION
+// ──────────────────────────────────────────────
+function startCalibration() {
+  if (!sensorEnabled) {
+    alert('Enable sensors first — tap an exercise and allow motion access.');
+    return;
+  }
+  isCalibrating = true;
+  calibRepsLeft = 3;
+  calibPeaks = [];
+  calibPhase = 'rest';
+  calibLastRepTime = 0;
+  peakActive = false;
+  peakMax = 0;
+  dynamicBaseline = 9.8;
+  smoothMag = 9.8;
+
+  document.getElementById('calibOverlay').classList.add('show');
+  document.getElementById('calibTitle').textContent = `🎯 Calibrate ${CONFIG[currentExercise].title}`;
+  document.getElementById('calibSub').innerHTML = `Do <strong>3 ${CONFIG[currentExercise].title}</strong> at your normal pace.<br>Place phone: <em>${CONFIG[currentExercise].placement}</em>`;
+  document.getElementById('calibCount').textContent = '3';
+  document.getElementById('calibHint').textContent = 'Waiting for your first rep...';
+}
+
+function handleCalibrationMotion(dynAcc) {
+  const now = Date.now();
+  // Use a very low fixed threshold to detect ANY movement during calibration
+  const detectThresh = 1.5;
+
+  if (!peakActive && dynAcc > detectThresh) {
+    peakActive = true;
+    peakMax = dynAcc;
+  } else if (peakActive) {
+    peakMax = Math.max(peakMax, dynAcc);
+    if (dynAcc < detectThresh * 0.4) {
+      peakActive = false;
+      if (now - calibLastRepTime > 400 && peakMax > 1.5) {
+        calibLastRepTime = now;
+        calibPeaks.push(peakMax);
+        calibRepsLeft--;
+        document.getElementById('calibCount').textContent = Math.max(0, calibRepsLeft);
+        document.getElementById('calibHint').textContent = calibRepsLeft > 0
+          ? `Good! ${calibRepsLeft} more rep${calibRepsLeft > 1 ? 's' : ''}...`
+          : 'Calibrated! ✅';
+
+        if (calibRepsLeft <= 0) {
+          finishCalibration();
+        }
+      }
+      peakMax = 0;
+    }
+  }
+}
+
+function finishCalibration() {
+  isCalibrating = false;
+  // Set threshold to 60% of average peak — catches most reps without false triggers
+  const avgPeak = calibPeaks.reduce((a, b) => a + b, 0) / calibPeaks.length;
+  customThreshold = avgPeak * 0.55;
+
+  setTimeout(() => {
+    document.getElementById('calibOverlay').classList.remove('show');
+    document.getElementById('statusText').textContent = `✅ Calibrated! Threshold set to ${customThreshold.toFixed(1)} m/s². Start your workout!`;
+  }, 800);
+}
+
+function cancelCalibration() {
+  isCalibrating = false;
+  peakActive = false;
+  document.getElementById('calibOverlay').classList.remove('show');
+}
 
 // ──────────────────────────────────────────────
 // WORKOUT CONTROL
@@ -1034,28 +1271,28 @@ function toggleWorkout() {
 
 function startWorkout() {
   isRunning = true;
-  repPhase = 'up';
+  peakActive = false;
+  peakMax = 0;
   lastRepTime = 0;
+  dynamicBaseline = 9.8;
+  smoothMag = 9.8;
 
   document.getElementById('mainBtn').textContent = 'STOP';
   document.getElementById('mainBtn').className = 'btn-main btn-stop';
   document.getElementById('statusText').textContent = CONFIG[currentExercise].statusRunning;
 
-  // Session timer
   sessionInterval = setInterval(() => {
     sessionSeconds++;
     document.getElementById('sessionTime').textContent = formatTime(sessionSeconds);
   }, 1000);
 
-  // Plank timer
   if (currentExercise === 'plank') {
     plankInterval = setInterval(() => {
       plankSeconds++;
       document.getElementById('plankTime').textContent = formatTime(plankSeconds);
       document.getElementById('bigCount').textContent = plankSeconds;
       document.getElementById('calBurned').textContent = Math.round(plankSeconds * 0.1);
-      updateMotionBars(Math.random() * 2); // show activity
-      // Pulse ring
+      updateMotionBars(Math.random() * 1.5);
       const ring = document.getElementById('counterRing');
       ring.classList.add('pulse');
       setTimeout(() => ring.classList.remove('pulse'), 300);
@@ -1075,10 +1312,7 @@ function stopWorkout() {
   document.getElementById('mainBtn').className = 'btn-main btn-start';
   document.getElementById('statusText').textContent = CONFIG[currentExercise].statusStart;
 
-  // Save to history
-  if (repCount > 0 || plankSeconds > 0) {
-    saveSession();
-  }
+  if (repCount > 0 || plankSeconds > 0) saveSession();
 }
 
 function resetCount() {
@@ -1086,6 +1320,7 @@ function resetCount() {
   repCount = 0;
   plankSeconds = 0;
   sessionSeconds = 0;
+  peakActive = false;
   document.getElementById('bigCount').textContent = '0';
   document.getElementById('plankTime').textContent = '0:00';
   document.getElementById('calBurned').textContent = '0';
@@ -1098,25 +1333,20 @@ function incrementRep() {
   repCount++;
   document.getElementById('bigCount').textContent = repCount;
 
-  // Bump animation
   const bc = document.getElementById('bigCount');
   bc.classList.remove('bump');
   void bc.offsetWidth;
   bc.classList.add('bump');
   setTimeout(() => bc.classList.remove('bump'), 200);
 
-  // Glow pulse
   const ring = document.getElementById('counterRing');
   ring.classList.add('pulse');
   setTimeout(() => ring.classList.remove('pulse'), 400);
 
-  // Calories
-  const cal = Math.round(repCount * CONFIG[currentExercise].calPerRep);
-  document.getElementById('calBurned').textContent = cal;
+  document.getElementById('calBurned').textContent = Math.round(repCount * CONFIG[currentExercise].calPerRep);
 
-  // Status every 5
   if (repCount % 5 === 0) {
-    document.getElementById('statusText').textContent = `💥 ${repCount} reps! Keep pushing!`;
+    document.getElementById('statusText').textContent = `💥 ${repCount} reps! Keep going!`;
   }
 }
 
@@ -1127,43 +1357,28 @@ function getStorage() {
   try { return JSON.parse(localStorage.getItem('reptrack') || '{"sessions":[],"today":{}}'); }
   catch { return { sessions: [], today: {} }; }
 }
-
-function setStorage(data) {
-  localStorage.setItem('reptrack', JSON.stringify(data));
-}
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
+function setStorage(data) { localStorage.setItem('reptrack', JSON.stringify(data)); }
+function todayKey() { return new Date().toISOString().slice(0, 10); }
 
 function saveSession() {
   const data = getStorage();
   const val = currentExercise === 'plank' ? plankSeconds : repCount;
   const unit = currentExercise === 'plank' ? 'sec' : 'reps';
-
-  const session = {
-    exercise: currentExercise,
-    value: val,
-    unit,
+  data.sessions.unshift({
+    exercise: currentExercise, value: val, unit,
     date: todayKey(),
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     cal: Math.round(val * CONFIG[currentExercise].calPerRep),
     duration: sessionSeconds
-  };
-
-  data.sessions.unshift(session);
-
-  // Update today totals
+  });
   if (!data.today[todayKey()]) data.today[todayKey()] = { push: 0, squat: 0, plank: 0 };
   data.today[todayKey()][currentExercise] += val;
-
   setStorage(data);
 }
 
 function updateHomeStats() {
   const data = getStorage();
   const t = data.today[todayKey()] || { push: 0, squat: 0, plank: 0 };
-
   document.getElementById('todayPush').textContent = t.push;
   document.getElementById('todaySquat').textContent = t.squat;
   document.getElementById('todayPlank').textContent = t.plank;
@@ -1171,15 +1386,12 @@ function updateHomeStats() {
   document.getElementById('homeSquat').textContent = t.squat;
   document.getElementById('homePlank').textContent = t.plank;
 
-  // Streak calc
   const days = Object.keys(data.today).sort().reverse();
   let streak = 0;
-  const today = todayKey();
   for (let i = 0; i < days.length; i++) {
     const expected = new Date();
     expected.setDate(expected.getDate() - i);
-    const exp = expected.toISOString().slice(0, 10);
-    if (days.includes(exp)) streak++;
+    if (days.includes(expected.toISOString().slice(0, 10))) streak++;
     else break;
   }
   document.getElementById('streakNum').textContent = streak;
@@ -1188,22 +1400,14 @@ function updateHomeStats() {
 function renderHistory() {
   const data = getStorage();
   const el = document.getElementById('historyContent');
-
   if (!data.sessions.length) {
     el.innerHTML = '<div class="history-empty">No workouts yet.<br>Start your first session! 💪</div>';
     return;
   }
-
-  // Group by date
   const byDate = {};
-  data.sessions.forEach(s => {
-    if (!byDate[s.date]) byDate[s.date] = [];
-    byDate[s.date].push(s);
-  });
-
+  data.sessions.forEach(s => { if (!byDate[s.date]) byDate[s.date] = []; byDate[s.date].push(s); });
   const icons = { push: '💪', squat: '🦵', plank: '⚡' };
   const names = { push: 'Push-Up', squat: 'Squat', plank: 'Plank' };
-
   el.innerHTML = Object.keys(byDate).sort().reverse().map(date => {
     const d = new Date(date + 'T12:00:00');
     const label = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
@@ -1220,23 +1424,13 @@ function renderHistory() {
           <div class="entry-count">${s.value}</div>
           <div class="entry-unit">${s.unit}</div>
         </div>
-      </div>
-    `).join('');
-
-    return `<div class="history-day">
-      <div class="history-day-label">${label}</div>
-      ${entries}
-    </div>`;
+      </div>`).join('');
+    return `<div class="history-day"><div class="history-day-label">${label}</div>${entries}</div>`;
   }).join('');
 }
 
-// ──────────────────────────────────────────────
-// HELPERS
-// ──────────────────────────────────────────────
 function formatTime(s) {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${sec.toString().padStart(2, '0')}`;
+  return `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
 }
 
 // ──────────────────────────────────────────────
@@ -1244,12 +1438,10 @@ function formatTime(s) {
 // ──────────────────────────────────────────────
 updateHomeStats();
 
-// Check if sensor already available (Android / non-iOS)
 if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission !== 'function') {
   startSensor();
 }
 
-// Register SW for PWA
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
