@@ -953,6 +953,7 @@ let calibRepsLeft = 3;
 let calibPeaks = [];
 let calibPhase = 'rest';
 let calibLastRepTime = 0;
+let calibPeakCurrent = 0;
 
 const CONFIG = {
   push: {
@@ -1084,17 +1085,16 @@ function showHistory() {
 function onSensChange(val) {
   sensitivityLevel = parseInt(val);
   document.getElementById('sensVal').textContent = val;
-  // Reset custom threshold so new sensitivity takes effect
-  customThreshold = null;
+  customThreshold = null; // reset calibration so slider takes effect
 }
 
 function getThreshold() {
   if (customThreshold !== null) return customThreshold;
-  // Sensitivity 1 = hardest to trigger (high threshold), 10 = easiest (low threshold)
   const base = CONFIG[currentExercise].defaultThreshold;
-  // Map slider 1–10 to multiplier 2.0 → 0.4
-  const multiplier = 2.0 - (sensitivityLevel - 1) * (1.6 / 9);
-  return base * multiplier;
+  // Slider 1 = 2× base (harder to trigger), 5 = 1× base, 10 = 0.55× base
+  // Much narrower range than before — avoids hair-trigger at high end
+  const multiplier = 1.0 + (5 - sensitivityLevel) * 0.09;
+  return Math.max(base * 0.55, base * multiplier);
 }
 
 // ──────────────────────────────────────────────
@@ -1119,22 +1119,36 @@ function closeModal() {
   document.getElementById('sensorDot').className = 'sensor-dot inactive';
 }
 
-// ── PEAK DETECTION ENGINE ──
-// Strategy:
-// 1. Compute raw magnitude of acceleration vector every sample
-// 2. Maintain a rolling "baseline" using a slow-moving average (gravity cancellation)
-// 3. Subtract baseline → get "dynamic" acceleration (only movement, not gravity)
-// 4. When dynamic acc exceeds threshold → mark as ACTIVE
-// 5. When it drops back below threshold after being active → count 1 REP (peak complete)
-// 6. Enforce cooldown to prevent double-counts
+// ── TWO-PHASE STATE MACHINE ENGINE ──
+//
+// A push-up or squat produces TWO acceleration spikes per rep:
+//   Spike 1 = going DOWN  (body accelerates downward)
+//   Spike 2 = coming UP   (body decelerates/reverses)
+// Old code counted BOTH spikes → doubled every rep.
+//
+// Fix: 3-state machine:
+//   IDLE  → big spike detected → enter MOVING (armed)
+//   MOVING → signal drops to quiet zone → enter SETTLING (quiet window required)
+//   SETTLING → stays quiet for MIN_QUIET_MS → count 1 REP, back to IDLE
+//
+// This means we only count AFTER the signal fully returns to rest.
+// One full rep = one count. No doubles.
 
-let dynamicBaseline = 9.8; // start at gravity
-const BASELINE_ALPHA = 0.98; // very slow update — preserves gravity well
-const PEAK_ALPHA = 0.3;      // fast update for current reading
+let dynamicBaseline = 9.8;
+const BASELINE_ALPHA = 0.985; // very slow — preserves gravity component
+const SIGNAL_ALPHA   = 0.25;  // fast smooth for current reading
 
 let smoothMag = 9.8;
-let peakActive = false;
-let peakMax = 0;
+
+// State machine
+const S_IDLE     = 0; // waiting for movement to start
+const S_MOVING   = 1; // inside a movement burst (spike seen)
+const S_SETTLING = 2; // spike ended, waiting for quiet confirmation
+let repState = S_IDLE;
+let settleStart = 0;  // timestamp when we entered SETTLING
+const MIN_QUIET_MS = 200; // must stay quiet this long to confirm rep complete
+// Minimum time between rep counts (hard floor to stop rapid-fire)
+const MIN_REP_GAP_MS = 700;
 
 function onMotion(e) {
   const acc = e.accelerationIncludingGravity;
@@ -1143,43 +1157,54 @@ function onMotion(e) {
   const x = acc.x || 0, y = acc.y || 0, z = acc.z || 0;
   const rawMag = Math.sqrt(x*x + y*y + z*z);
 
-  // Update slow baseline (tracks gravity over time)
+  // Slow baseline tracks resting gravity over time
   dynamicBaseline = BASELINE_ALPHA * dynamicBaseline + (1 - BASELINE_ALPHA) * rawMag;
 
-  // Smooth fast signal
-  smoothMag = PEAK_ALPHA * rawMag + (1 - PEAK_ALPHA) * smoothMag;
+  // Fast smooth signal
+  smoothMag = SIGNAL_ALPHA * rawMag + (1 - SIGNAL_ALPHA) * smoothMag;
 
-  // Dynamic acceleration = deviation from baseline
+  // dynAcc = how much are we moving RIGHT NOW vs resting
   const dynAcc = Math.abs(smoothMag - dynamicBaseline);
 
   updateMotionBars(dynAcc);
 
-  // Calibration mode — record peaks
-  if (isCalibrating) {
-    handleCalibrationMotion(dynAcc);
-    return;
-  }
+  // Always feed calibration if active
+  if (isCalibrating) { handleCalibrationMotion(dynAcc); return; }
 
   if (!isRunning || currentExercise === 'plank') return;
 
-  const threshold = getThreshold();
+  const threshold  = getThreshold();
+  const quietZone  = threshold * 0.25; // must drop to 25% of threshold to confirm rest
   const now = Date.now();
 
-  if (!peakActive && dynAcc > threshold) {
-    // Rising edge — movement started
-    peakActive = true;
-    peakMax = dynAcc;
-  } else if (peakActive) {
-    peakMax = Math.max(peakMax, dynAcc);
-    if (dynAcc < threshold * 0.4) {
-      // Falling edge — movement ended, count rep
-      peakActive = false;
-      if (now - lastRepTime > CONFIG[currentExercise].minCooldown) {
+  if (repState === S_IDLE) {
+    // Wait for a real movement spike
+    if (dynAcc > threshold) {
+      repState = S_MOVING;
+    }
+
+  } else if (repState === S_MOVING) {
+    // Inside movement — wait for signal to drop back to quiet
+    if (dynAcc < quietZone) {
+      repState = S_SETTLING;
+      settleStart = now;
+    }
+    // (if signal stays high, we stay in MOVING — don't count yet)
+
+  } else if (repState === S_SETTLING) {
+    if (dynAcc > quietZone) {
+      // Noise bump — could be the second stroke of the rep, go back to MOVING
+      // This prevents the return stroke from re-triggering a new count
+      repState = S_MOVING;
+    } else if (now - settleStart >= MIN_QUIET_MS) {
+      // Signal stayed quiet long enough → confirmed full rep
+      repState = S_IDLE;
+      if (now - lastRepTime >= MIN_REP_GAP_MS) {
         lastRepTime = now;
         incrementRep();
       }
-      peakMax = 0;
     }
+    // else: still in quiet window, keep waiting
   }
 }
 
@@ -1201,8 +1226,8 @@ function startCalibration() {
   calibPeaks = [];
   calibPhase = 'rest';
   calibLastRepTime = 0;
-  peakActive = false;
-  peakMax = 0;
+  repState = S_IDLE;
+  settleStart = 0;
   dynamicBaseline = 9.8;
   smoothMag = 9.8;
 
@@ -1215,30 +1240,37 @@ function startCalibration() {
 
 function handleCalibrationMotion(dynAcc) {
   const now = Date.now();
-  // Use a very low fixed threshold to detect ANY movement during calibration
-  const detectThresh = 1.5;
+  const detectThresh = 1.2;
+  const quietZone = detectThresh * 0.25;
 
-  if (!peakActive && dynAcc > detectThresh) {
-    peakActive = true;
-    peakMax = dynAcc;
-  } else if (peakActive) {
-    peakMax = Math.max(peakMax, dynAcc);
-    if (dynAcc < detectThresh * 0.4) {
-      peakActive = false;
-      if (now - calibLastRepTime > 400 && peakMax > 1.5) {
+  if (calibPhase === 'rest') {
+    if (dynAcc > detectThresh) calibPhase = 'moving';
+  } else if (calibPhase === 'moving') {
+    if (dynAcc > detectThresh) {
+      // track max during movement
+      calibPeakCurrent = Math.max(calibPeakCurrent || 0, dynAcc);
+    }
+    if (dynAcc < quietZone) {
+      calibPhase = 'settling';
+      settleStart = now;
+    }
+  } else if (calibPhase === 'settling') {
+    if (dynAcc > quietZone) {
+      calibPhase = 'moving'; // bounce back — still inside the rep
+    } else if (now - settleStart >= 200) {
+      // confirmed rep complete
+      calibPhase = 'rest';
+      if (now - calibLastRepTime > 400 && calibPeakCurrent > 1.2) {
         calibLastRepTime = now;
-        calibPeaks.push(peakMax);
+        calibPeaks.push(calibPeakCurrent);
+        calibPeakCurrent = 0;
         calibRepsLeft--;
         document.getElementById('calibCount').textContent = Math.max(0, calibRepsLeft);
         document.getElementById('calibHint').textContent = calibRepsLeft > 0
           ? `Good! ${calibRepsLeft} more rep${calibRepsLeft > 1 ? 's' : ''}...`
           : 'Calibrated! ✅';
-
-        if (calibRepsLeft <= 0) {
-          finishCalibration();
-        }
+        if (calibRepsLeft <= 0) finishCalibration();
       }
-      peakMax = 0;
     }
   }
 }
@@ -1271,8 +1303,8 @@ function toggleWorkout() {
 
 function startWorkout() {
   isRunning = true;
-  peakActive = false;
-  peakMax = 0;
+  repState = S_IDLE;
+  settleStart = 0;
   lastRepTime = 0;
   dynamicBaseline = 9.8;
   smoothMag = 9.8;
@@ -1320,7 +1352,8 @@ function resetCount() {
   repCount = 0;
   plankSeconds = 0;
   sessionSeconds = 0;
-  peakActive = false;
+  repState = S_IDLE;
+  settleStart = 0;
   document.getElementById('bigCount').textContent = '0';
   document.getElementById('plankTime').textContent = '0:00';
   document.getElementById('calBurned').textContent = '0';
